@@ -1,12 +1,13 @@
 using System.Security.Claims;
 using IdentityTinkering.Constants;
+using IdentityTinkering.Models;
 using Microsoft.AspNetCore.Identity;
 
 namespace IdentityTinkering.Services;
 
 public static class RoleSeeder
 {
-    public static async Task SeedRolesAndPermissions(RoleManager<IdentityRole> roleManager, UserManager<IdentityUser> userManager)
+    public static async Task SeedRolesAndPermissions(RoleManager<IdentityRole> roleManager, UserManager<ApplicationUser> userManager)
     {
         await SeedAdminRole(roleManager);
         await SeedUserRole(roleManager);
@@ -37,7 +38,7 @@ public static class RoleSeeder
         await roleManager.AddClaimAsync(userRole, new Claim("Permission", Permissions.ViewRoles));
     }
 
-    private static async Task SeedAdmins(UserManager<IdentityUser> userManager)
+    private static async Task SeedAdmins(UserManager<ApplicationUser> userManager)
     {
         var user = await userManager.FindByEmailAsync("Johannes.sutton2003@gmail.com");
         if (user == null || await userManager.IsInRoleAsync(user, "Admin")) return;

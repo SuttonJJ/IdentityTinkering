@@ -10,7 +10,7 @@ namespace IdentityTinkering.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-public class RolesController(IdentityContext context, RoleManager<IdentityRole> roleManager, UserManager<IdentityUser> userManager) : ControllerBase
+public class RolesController(IdentityContext context, RoleManager<IdentityRole> roleManager, UserManager<ApplicationUser> userManager) : ControllerBase
 {
     [Authorize(Roles = "admin")]
     [HttpPost("create-role")]

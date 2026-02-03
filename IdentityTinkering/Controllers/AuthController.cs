@@ -2,6 +2,8 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 using IdentityTinkering.Models;
+using IdentityTinkering.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -11,7 +13,8 @@ namespace IdentityTinkering.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-public class AuthController(IdentityContext context, IConfiguration configuration, UserManager<IdentityUser> userManager, SignInManager<IdentityUser> signInManager) : ControllerBase
+public class AuthController(IdentityContext context, IConfiguration configuration, UserManager<ApplicationUser> userManager, 
+    SignInManager<ApplicationUser> signInManager, TokenService tokenService) : ControllerBase
 {
     [HttpPost("register")]
     public async Task<IActionResult> Register(RegisterDto request)
@@ -19,7 +22,7 @@ public class AuthController(IdentityContext context, IConfiguration configuratio
         var existingUser = await userManager.FindByEmailAsync(request.Email);
         if (existingUser != null) return BadRequest("User with this email already exists");
         
-        IdentityUser user = new IdentityUser
+        ApplicationUser user = new ApplicationUser
         {
             UserName = request.Email, 
             Email = request.Email
@@ -43,24 +46,40 @@ public class AuthController(IdentityContext context, IConfiguration configuratio
 
         if (user == null || !await userManager.CheckPasswordAsync(user, request.Password)) return Unauthorized("Invalid email or password");
 
-        var token = await GenerateJwtToken(user);
+        var accessToken = await tokenService.GenerateJwtToken(user);
+        var refreshToken = tokenService.GenerateRefreshToken();
+
+        user.RefreshToken = refreshToken;
+        user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
+        await userManager.UpdateAsync(user);
         
         return Ok(new LoginResponseDto
         {
-            Token = token,
+            AccessToken = accessToken,
+            RefreshToken = refreshToken,
             Email = user.Email
         });
     }
-
     
+    [Authorize]
     [HttpPost("logout")]
-    public IActionResult Logout()
+    public async Task<IActionResult> Logout()
     {
+        var username = User.Identity?.Name;
+        if (username == null) return Ok("Logged out");
+
+        var user = await userManager.FindByNameAsync(username);
+        if (user != null)
+        {
+            user.RefreshToken = null;
+            await userManager.UpdateAsync(user);
+        }
+
         return Ok("Logged out");
     }
     
     
-    // For testing purposes, deletes all users
+    // For development testing purposes, deletes all users
     [HttpDelete("clear")]
     public async Task<IActionResult> ClearUserDb()
     {
@@ -68,38 +87,52 @@ public class AuthController(IdentityContext context, IConfiguration configuratio
 
         return NoContent();
     }
-
-    private async Task<string> GenerateJwtToken(IdentityUser user)
+    
+    
+    
+    // Token management
+    [HttpPost("refresh")]
+    public async Task<IActionResult> RefreshToken([FromBody] TokenRequest request)
     {
-        var claims = new List<Claim>
-        {
-            new Claim(JwtRegisteredClaimNames.Sub, user.Id),
-            new Claim(JwtRegisteredClaimNames.Email, user.Email!),
-            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-            new Claim(ClaimTypes.NameIdentifier, user.Id),
-            new Claim(ClaimTypes.Name, user.UserName!)
-        };
+        if (request == null) return BadRequest("Invalid request");
 
-        var roles = await userManager.GetRolesAsync(user);
-
-        foreach (var role in roles)
+        string accessToken = request.AccessToken;
+        string refreshToken = request.RefreshToken;
+        
+        ClaimsPrincipal principal;
+        try
         {
-            claims.Add(new Claim(ClaimTypes.Role, role));
+            principal = tokenService.GetPrincipalFromExpiredToken(accessToken);
+        }
+        catch
+        {
+            return BadRequest("Invalid access token");
         }
 
-        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["Jwt:Secret"]));
-
-        var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+        string? username = principal.Identity?.Name;
+        if (string.IsNullOrEmpty(username))
+        {
+            return BadRequest("Invalid token claims");
+        }
+        var user = await userManager.FindByNameAsync(username);
         
-        var token = new JwtSecurityToken(
-            issuer: configuration["Jwt:Issuer"],
-            audience: configuration["Jwt:Audience"],
-            claims: claims,
-            expires: DateTime.UtcNow.AddMinutes(
-                double.Parse(configuration["Jwt:ExpiresInMinutes"]!)),
-            signingCredentials: credentials
-        );
+        if (user == null || 
+            user.RefreshToken != refreshToken || 
+            user.RefreshTokenExpiryTime <= DateTime.UtcNow)
+        {
+            return BadRequest("Invalid refresh token");
+        }
 
-        return new JwtSecurityTokenHandler().WriteToken(token);
+        var newAccessToken = await tokenService.GenerateJwtToken(user);
+        var newRefreshToken = tokenService.GenerateRefreshToken();
+        
+        user.RefreshToken = newRefreshToken;
+        await userManager.UpdateAsync(user);
+
+        return Ok(new
+        {
+            AccessToken = newAccessToken,
+            RefreshToken = newRefreshToken
+        });
     }
 }
