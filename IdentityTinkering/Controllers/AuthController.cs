@@ -2,19 +2,16 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 using IdentityTinkering.Models;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using SignInResult = Microsoft.AspNetCore.Mvc.SignInResult;
 
 namespace IdentityTinkering.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-public class LoginController(IdentityContext context, IConfiguration configuration, UserManager<IdentityUser> userManager, SignInManager<IdentityUser> signInManager) : ControllerBase
+public class AuthController(IdentityContext context, IConfiguration configuration, UserManager<IdentityUser> userManager, SignInManager<IdentityUser> signInManager) : ControllerBase
 {
     [HttpPost("register")]
     public async Task<IActionResult> Register(RegisterDto request)
@@ -46,7 +43,7 @@ public class LoginController(IdentityContext context, IConfiguration configurati
 
         if (user == null || !await userManager.CheckPasswordAsync(user, request.Password)) return Unauthorized("Invalid email or password");
 
-        var token = GenerateJwtToken(user);
+        var token = await GenerateJwtToken(user);
         
         return Ok(new LoginResponseDto
         {
@@ -57,9 +54,8 @@ public class LoginController(IdentityContext context, IConfiguration configurati
 
     
     [HttpPost("logout")]
-    public async Task<IActionResult> Logout()
+    public IActionResult Logout()
     {
-        await signInManager.SignOutAsync();
         return Ok("Logged out");
     }
     
@@ -73,7 +69,7 @@ public class LoginController(IdentityContext context, IConfiguration configurati
         return NoContent();
     }
 
-    private string GenerateJwtToken(IdentityUser user)
+    private async Task<string> GenerateJwtToken(IdentityUser user)
     {
         var claims = new List<Claim>
         {
@@ -83,6 +79,13 @@ public class LoginController(IdentityContext context, IConfiguration configurati
             new Claim(ClaimTypes.NameIdentifier, user.Id),
             new Claim(ClaimTypes.Name, user.UserName!)
         };
+
+        var roles = await userManager.GetRolesAsync(user);
+
+        foreach (var role in roles)
+        {
+            claims.Add(new Claim(ClaimTypes.Role, role));
+        }
 
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["Jwt:Secret"]));
 
